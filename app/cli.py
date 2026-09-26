@@ -7,12 +7,14 @@ from fastapi.testclient import TestClient
 
 from app.database import database_path, get_connection, init_db
 from app.main import app
+from app.temple.duty import ensure_duty_schema
 from app.temple.schema import ensure_temple_schema
 
 
 def command_init() -> int:
     init_db()
     ensure_temple_schema(get_connection())
+    ensure_duty_schema(get_connection())
     print(json.dumps({"database": str(database_path()), "status": "initialized"}, ensure_ascii=False))
     return 0
 
@@ -21,6 +23,7 @@ def command_check() -> int:
     init_db()
     connection = get_connection()
     ensure_temple_schema(connection)
+    ensure_duty_schema(connection)
     result = {
         "database": str(database_path()),
         "integrity": connection.execute("PRAGMA integrity_check").fetchone()[0],

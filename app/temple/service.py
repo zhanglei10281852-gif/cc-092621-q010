@@ -9,6 +9,7 @@ from app.core.clock import Clock, SystemClock, from_storage, to_storage
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.security import request_fingerprint
 from app.database import get_connection, transaction
+from app.temple.duty import DutyAuthorizationService
 from app.temple.repository import TempleRepository
 from app.temple.rules import DEFAULT_RULES, allocation_for, canonical_rules, judge_quality
 from app.temple.schema import ensure_temple_schema
@@ -177,9 +178,29 @@ class TempleSafetyService:
         app = self.repository.incense_profile_by_id(safety_incident["incense_profile_id"])
         now_value = self.clock.now()
         now = to_storage(now_value)
+        duty = DutyAuthorizationService(self.connection, self.clock)
         authorization = self.repository.active_authorization(observation["steward_hash"], safety_incident["temple_id"], now)
-        if authorization is None:
-            raise ConflictError("用户没有当前寺院的有效缓解权益")
+        if authorization is not None:
+            provenance: dict[str, Any] = {
+                "kind": "steward_authorization",
+                "authorization_id": authorization["id"],
+                "authorization_code": authorization["authorization_code"],
+            }
+        else:
+            decision = duty.decide(
+                subject_hash=observation["steward_hash"],
+                temple_id=safety_incident["temple_id"],
+                hall_id=safety_incident["hall_id"],
+                action="mitigation.start",
+                at=now,
+            )
+            if not decision["allowed"]:
+                raise ConflictError(
+                    "用户没有当前寺院与殿堂的有效处置授权",
+                    context={"authorization": {"allowed": False, "summary": decision["summary"], "denials": decision["denials"]}},
+                )
+            source = decision["sources"][0]
+            provenance = {"kind": "duty_grant", "grant_id": source["grant_id"], "grant_code": source["grant_code"], "shift_code": source["shift_code"]}
         safety_policy = self.repository.effective_safety_policy(safety_incident["temple_id"], now)
         if safety_policy is None:
             raise ConflictError("寺院没有已生效的缓解策略")
@@ -199,6 +220,19 @@ class TempleSafetyService:
             raise ConflictError("殿堂送风容量不足")
         expires = to_storage(now_value + timedelta(seconds=allocation.duration_seconds))
         with transaction(immediate=True) as connection:
+            # 并发撤回防护：在写事务内复核授权来源仍然有效，撤回与提交由 BEGIN IMMEDIATE 串行化。
+            if provenance["kind"] == "steward_authorization":
+                still_valid = TempleRepository(connection).active_authorization(observation["steward_hash"], safety_incident["temple_id"], now) is not None
+            else:
+                still_valid = duty.decide(
+                    subject_hash=observation["steward_hash"],
+                    temple_id=safety_incident["temple_id"],
+                    hall_id=safety_incident["hall_id"],
+                    action="mitigation.start",
+                    at=now,
+                )["allowed"]
+            if not still_valid:
+                raise ConflictError("授权在提交前已被收回", context={"authorization": provenance})
             cursor = connection.execute(
                 "INSERT INTO mitigation_sessions(safety_incident_id,steward_hash,incense_profile_id,temple_id,hall_id,safety_policy_version_id,allocated_supply_airflow,allocated_exhaust_airflow,priority,started_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (safety_incident_id, observation["steward_hash"], safety_incident["incense_profile_id"], safety_incident["temple_id"], safety_incident["hall_id"], safety_policy["id"], allocation.supply_airflow, allocation.exhaust_airflow, allocation.priority, now, expires),
@@ -208,7 +242,7 @@ class TempleSafetyService:
                 (cursor.lastrowid, safety_incident["temple_id"], safety_incident["hall_id"], allocation.supply_airflow, allocation.exhaust_airflow, now),
             )
             connection.execute("UPDATE safety_incidents SET state='mitigating',version=version+1 WHERE id=?", (safety_incident_id,))
-            self._event(connection, cursor.lastrowid, "started", actor, {"safety_policy_version": safety_policy["version_no"]}, now)
+            self._event(connection, cursor.lastrowid, "started", actor, {"safety_policy_version": safety_policy["version_no"], "authorization": provenance}, now)
             return TempleRepository(connection).mitigation_session_detail(cursor.lastrowid)
 
     def finish_mitigation_session(self, mitigation_session_id: int, actor: str, reason: str, result: str) -> dict[str, Any]:

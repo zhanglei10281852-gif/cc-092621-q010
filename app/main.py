@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 from app.api import audit, auth, maintenance, roles, system, users
 from app.core.errors import DomainError
 from app.database import close_connection, get_connection, init_db
+from app.temple.duty import DutyAuthorizationService, ensure_duty_schema
+from app.temple.duty_router import router as duty_router
 from app.temple.router import router as temple_router
 from app.temple.operations_router import router as operations_router
 from app.temple.schema import ensure_temple_schema
@@ -18,6 +20,9 @@ async def lifespan(app: FastAPI):
     del app
     init_db()
     ensure_temple_schema(get_connection())
+    ensure_duty_schema(get_connection())
+    # 重启只做收敛：把已经过期的授权与班次落库为终态，绝不扩大任何人的可见范围。
+    DutyAuthorizationService(get_connection()).sweep_expired()
     yield
     close_connection()
 
@@ -42,6 +47,7 @@ app.include_router(system.router)
 app.include_router(maintenance.router)
 app.include_router(temple_router)
 app.include_router(operations_router)
+app.include_router(duty_router)
 
 
 @app.get("/")

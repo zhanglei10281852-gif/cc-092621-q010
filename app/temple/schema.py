@@ -199,6 +199,53 @@ CREATE TABLE IF NOT EXISTS restoration_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_restoration_events_resource ON restoration_events(resource_type,resource_id,id);
+CREATE TABLE IF NOT EXISTS duty_shifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    temple_id INTEGER NOT NULL REFERENCES temple_sites(id),
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    starts_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'scheduled' CHECK(state IN ('scheduled','cancelled')),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cancelled_at TEXT,
+    cancel_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_duty_shifts_window ON duty_shifts(temple_id,state,starts_at,ends_at);
+CREATE TABLE IF NOT EXISTS scoped_grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    grant_code TEXT NOT NULL UNIQUE,
+    subject_hash TEXT NOT NULL,
+    temple_id INTEGER NOT NULL REFERENCES temple_sites(id),
+    hall_id INTEGER REFERENCES worship_halls(id),
+    action TEXT NOT NULL,
+    shift_id INTEGER NOT NULL REFERENCES duty_shifts(id),
+    parent_grant_id INTEGER REFERENCES scoped_grants(id),
+    delegator_hash TEXT,
+    delegation_depth INTEGER NOT NULL DEFAULT 0 CHECK(delegation_depth >= 0),
+    valid_from TEXT NOT NULL,
+    valid_until TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','revoked','expired','cancelled')),
+    source_approval_id TEXT NOT NULL UNIQUE,
+    revoked_at TEXT,
+    revoke_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scoped_grants_subject ON scoped_grants(subject_hash,temple_id,state,valid_from,valid_until);
+CREATE INDEX IF NOT EXISTS idx_scoped_grants_shift ON scoped_grants(shift_id,state);
+CREATE INDEX IF NOT EXISTS idx_scoped_grants_parent ON scoped_grants(parent_grant_id);
+CREATE TABLE IF NOT EXISTS scoped_grant_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    grant_id INTEGER NOT NULL REFERENCES scoped_grants(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scoped_grant_events ON scoped_grant_events(grant_id,id);
 '''
 
 

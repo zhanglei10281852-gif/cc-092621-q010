@@ -177,8 +177,17 @@ class TempleSafetyService:
         app = self.repository.incense_profile_by_id(safety_incident["incense_profile_id"])
         now_value = self.clock.now()
         now = to_storage(now_value)
-        authorization = self.repository.active_authorization(observation["steward_hash"], safety_incident["temple_id"], now)
-        if authorization is None:
+        from app.temple.duty import DutyRosterService
+        duty = DutyRosterService(self.connection, self.clock)
+        grant = duty.find_allowing_grant(observation["steward_hash"], safety_incident["temple_id"], safety_incident["hall_id"], "mitigation.start", now)
+        authorization_source: dict[str, Any] | None = None
+        if grant is not None:
+            authorization_source = {"type": "scoped_grant", "grant_id": grant["id"], "grant_code": grant["grant_code"]}
+        else:
+            authorization = self.repository.active_authorization(observation["steward_hash"], safety_incident["temple_id"], now)
+            if authorization is not None:
+                authorization_source = {"type": "steward_authorization", "authorization_id": authorization["id"], "authorization_code": authorization["authorization_code"]}
+        if authorization_source is None:
             raise ConflictError("用户没有当前寺院的有效缓解权益")
         safety_policy = self.repository.effective_safety_policy(safety_incident["temple_id"], now)
         if safety_policy is None:
@@ -208,7 +217,7 @@ class TempleSafetyService:
                 (cursor.lastrowid, safety_incident["temple_id"], safety_incident["hall_id"], allocation.supply_airflow, allocation.exhaust_airflow, now),
             )
             connection.execute("UPDATE safety_incidents SET state='mitigating',version=version+1 WHERE id=?", (safety_incident_id,))
-            self._event(connection, cursor.lastrowid, "started", actor, {"safety_policy_version": safety_policy["version_no"]}, now)
+            self._event(connection, cursor.lastrowid, "started", actor, {"safety_policy_version": safety_policy["version_no"], "authorization": authorization_source}, now)
             return TempleRepository(connection).mitigation_session_detail(cursor.lastrowid)
 
     def finish_mitigation_session(self, mitigation_session_id: int, actor: str, reason: str, result: str) -> dict[str, Any]:

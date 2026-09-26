@@ -86,3 +86,72 @@ class BatchObservations(BaseModel):
         if len(keys) != len(set(keys)):
             raise ValueError("同一批次内 observation_key 不能重复")
         return self
+
+
+DutyAction = Literal[
+    "mitigation.start",
+    "observation.ingest",
+    "restoration.manage",
+    "*",
+]
+
+
+class ShiftCreate(BaseModel):
+    temple_code: str = Field(min_length=2, max_length=64)
+    code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9._-]+$")
+    name: str = Field(min_length=1, max_length=120)
+    starts_at: str
+    ends_at: str
+    actor: str = Field(min_length=1, max_length=120)
+
+
+class ShiftCancel(BaseModel):
+    actor: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class ScopedGrantCreate(BaseModel):
+    grant_code: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9._-]+$")
+    subject_hash: str = Field(min_length=4, max_length=128)
+    temple_code: str = Field(min_length=2, max_length=64)
+    hall_code: str | None = Field(default=None, max_length=64)
+    action: DutyAction
+    shift_code: str = Field(min_length=2, max_length=64)
+    valid_from: str
+    valid_until: str
+    source_approval_id: str = Field(min_length=4, max_length=160)
+    delegation_depth: int = Field(default=0, ge=0, le=10)
+    actor: str = Field(min_length=1, max_length=120)
+
+
+class ScopedGrantDelegate(BaseModel):
+    grant_code: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9._-]+$")
+    subject_hash: str = Field(min_length=4, max_length=128)
+    delegator_hash: str = Field(min_length=4, max_length=128)
+    hall_code: str | None = Field(default=None, max_length=64)
+    action: DutyAction | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    source_approval_id: str = Field(min_length=4, max_length=160)
+    delegation_depth: int = Field(default=0, ge=0, le=10)
+    actor: str = Field(min_length=1, max_length=120)
+
+
+class ScopedGrantRevoke(BaseModel):
+    actor: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class SubjectOffboard(BaseModel):
+    subject_hash: str = Field(min_length=4, max_length=128)
+    temple_code: str | None = Field(default=None, max_length=64)
+    actor: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=2, max_length=500)
+
+
+class ScopedGrantExplain(BaseModel):
+    subject_hash: str = Field(min_length=4, max_length=128)
+    temple_code: str = Field(min_length=2, max_length=64)
+    hall_code: str | None = Field(default=None, max_length=64)
+    action: DutyAction
+    at: str | None = None
